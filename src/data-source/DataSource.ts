@@ -39,6 +39,8 @@ import { TypeORMError } from "../error"
 import { RelationIdLoader } from "../query-builder/RelationIdLoader"
 import { DriverUtils } from "../driver/DriverUtils"
 import { InstanceChecker } from "../util/InstanceChecker"
+import { MixedList } from '../common/MixedList'
+import { EntitySchema } from '../entity-schema/EntitySchema'
 
 /**
  * DataSource is a pre-defined connection configuration to a specific database.
@@ -648,7 +650,6 @@ export class DataSource {
      */
     protected async buildMetadatas(): Promise<void> {
         const connectionMetadataBuilder = new ConnectionMetadataBuilder(this)
-        const entityMetadataValidator = new EntityMetadataValidator()
 
         // create subscribers instances if they are not disallowed from high-level (for example they can disallowed from migrations run process)
         const flattenedSubscribers = ObjectUtils.mixedListToArray(
@@ -659,16 +660,6 @@ export class DataSource {
         )
         ObjectUtils.assign(this, { subscribers: subscribers })
 
-        // build entity metadatas
-        const flattenedEntities = ObjectUtils.mixedListToArray(
-            this.options.entities || [],
-        )
-        const entityMetadatas =
-            await connectionMetadataBuilder.buildEntityMetadatas(
-                flattenedEntities,
-            )
-        ObjectUtils.assign(this, { entityMetadatas: entityMetadatas })
-
         // create migration instances
         const flattenedMigrations = ObjectUtils.mixedListToArray(
             this.options.migrations || [],
@@ -678,9 +669,35 @@ export class DataSource {
         )
         ObjectUtils.assign(this, { migrations: migrations })
 
+        // build entity metadatas
+        this.addEntities(this.options.entities);
+    }
+
+    public async addEntities(entities?: MixedList<Function | string | EntitySchema>) {
+        const connectionMetadataBuilder = new ConnectionMetadataBuilder(this)
+        const entityMetadataValidator = new EntityMetadataValidator()
+
+        // build entity metadatas
+        const flattenedEntities = ObjectUtils.mixedListToArray(entities || [])
+        const entityMetadatas =
+            await connectionMetadataBuilder.buildEntityMetadatas(
+                flattenedEntities,
+            )
+        if (this.entityMetadatas) {
+            entityMetadatas.forEach(entityMetadata => {
+                if (this.hasMetadata(entityMetadata.target)) {
+                    throw new Error(`entity ${entityMetadata.targetName} already exists`);
+                } else {
+                    this.entityMetadatas.push(entityMetadata);
+                }
+            })
+        } else {
+            ObjectUtils.assign(this, { entityMetadatas: entityMetadatas })
+        }
+
         // validate all created entity metadatas to make sure user created entities are valid and correct
         entityMetadataValidator.validateMany(
-            this.entityMetadatas.filter(
+            entityMetadatas.filter(
                 (metadata) => metadata.tableType !== "view",
             ),
             this.driver,
